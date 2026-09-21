@@ -1,0 +1,16 @@
+# Copy to terraform.tfvars and fill in — never commit the real file.
+aws_region             = "eu-west-1"
+aws_account_id         = "123456789012"          # `aws sts get-caller-identity`
+project_name           = "wallet-lakehouse"
+environment             = "dev"
+github_repo             = "your-github-username/wallet-activity-lakehouse"  # exact "owner/repo" — scopes who can assume the OIDC role
+github_default_branch   = "main"
+
+# Leave false on Databricks Free Edition — it has no Account Console/API
+# access, so the Unity Catalog resources this flag gates cannot be applied
+# there (see variables.tf's description). Only flip to true, and fill in
+# the two values below, once you're on a Databricks tier with Account
+# Console access (Premium+).
+enable_unity_catalog_automation = false
+# databricks_account_id   = "00000000-0000-0000-0000-000000000000"  # Account Console > Settings
+# databricks_metastore_id = "00000000-0000-0000-0000-000000000000"  # Catalog > metastore details

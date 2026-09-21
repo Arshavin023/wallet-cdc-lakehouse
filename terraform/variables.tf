@@ -21,14 +21,35 @@ variable "aws_account_id" {
   type        = string
 }
 
+variable "enable_unity_catalog_automation" {
+  description = <<-EOT
+    Gates the Unity Catalog resources in main.tf (the cross-account IAM
+    role's Databricks-generated policies, the storage credential, and the
+    external location). These are account-level Databricks API resources —
+    Databricks Free Edition explicitly has "no access to the account console
+    or account-level APIs" (confirmed against Databricks' own docs), so they
+    CANNOT be applied against a Free Edition account, regardless of what
+    credentials you set. Leave this false on Free Edition; the S3 bucket and
+    GitHub OIDC/IAM resources apply fine either way, since they don't touch
+    the databricks provider at all. Flip to true only once you're on a
+    Databricks tier with Account Console access (Premium+), with
+    DATABRICKS_CLIENT_ID/DATABRICKS_CLIENT_SECRET set for an account-level
+    OAuth service principal.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "databricks_account_id" {
-  description = "Databricks account ID (UUID, found under Account Console > Settings). Required to register the Unity Catalog storage credential and external location."
+  description = "Databricks account ID (UUID, found under Account Console > Settings). Only needed when enable_unity_catalog_automation=true."
   type        = string
+  default     = ""
 }
 
 variable "databricks_metastore_id" {
-  description = "ID of the existing Unity Catalog metastore in this Databricks account (Free Edition provisions one automatically per account)."
+  description = "ID of the existing Unity Catalog metastore in this Databricks account. Only needed when enable_unity_catalog_automation=true."
   type        = string
+  default     = ""
 }
 
 variable "github_repo" {

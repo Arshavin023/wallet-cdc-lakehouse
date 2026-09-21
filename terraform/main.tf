@@ -3,7 +3,8 @@
 #
 # Provisions:
 #   1. An S3 bucket for the raw landing zone (CDC events + on-chain pulls),
-#      versioned, encrypted, with public access fully blocked.
+#      versioned, encrypted, with public access fully blocked. Always
+#      created — no Databricks dependency.
 #   2. A cross-account IAM role Databricks can assume to read/write that
 #      bucket, using Databricks' own policy-generating data sources rather
 #      than a hand-written trust policy (the two `databricks_aws_unity_*`
@@ -16,12 +17,22 @@
 #      configured (see README: "Databricks Free Edition — what actually
 #      works here").
 #
+# Blocks 2 and 3 are gated behind `var.enable_unity_catalog_automation`
+# (default false). Reason: both are account-level Databricks API resources,
+# and Databricks Free Edition has "no access to the account console or
+# account-level APIs" (confirmed directly against Databricks' own docs) —
+# so they genuinely cannot be applied against a Free Edition account, not
+# just "need credentials set." Block 1 (the bucket) and everything in
+# github_oidc.tf have no such dependency and apply fine as-is.
+#
 # This has been written against the Databricks Terraform provider's own
-# documented examples (verified against the provider's GitHub docs) but has
-# NOT been run through `terraform plan`/`apply` here — this sandbox has no
-# network path to releases.hashicorp.com to install the terraform CLI. Its
-# HCL syntax has been checked with python-hcl2. Treat this as a reviewed,
-# ready-to-run starting point, not a "confirmed working in production" claim.
+# documented examples (verified against the provider's GitHub docs). Block 1
+# and github_oidc.tf have been run through a real `terraform init`/`validate`
+# on the maintainer's machine (this sandbox has no network path to
+# releases.hashicorp.com to install the terraform CLI, so only HCL syntax
+# was checked here with python-hcl2). Blocks 2/3 are validated the same way
+# but not yet applied anywhere, since that requires a non-Free-Edition
+# Databricks tier — see the "Honest scope notes" in the README.
 # =============================================================================
 
 locals {
@@ -88,8 +99,11 @@ resource "aws_s3_bucket_lifecycle_configuration" "raw" {
 #    Uses Databricks' own policy-generator data sources so the trust policy
 #    and access policy match what UC actually validates against, rather
 #    than a hand-maintained copy that can drift.
+#    GATED — see var.enable_unity_catalog_automation and the header comment.
 # -----------------------------------------------------------------------------
 data "databricks_aws_unity_catalog_assume_role_policy" "this" {
+  count = var.enable_unity_catalog_automation ? 1 : 0
+
   provider       = databricks.account
   aws_account_id = var.aws_account_id
   role_name      = local.role_name
@@ -97,6 +111,8 @@ data "databricks_aws_unity_catalog_assume_role_policy" "this" {
 }
 
 data "databricks_aws_unity_catalog_policy" "this" {
+  count = var.enable_unity_catalog_automation ? 1 : 0
+
   provider       = databricks.account
   aws_account_id = var.aws_account_id
   bucket_name    = aws_s3_bucket.raw.id
@@ -104,39 +120,57 @@ data "databricks_aws_unity_catalog_policy" "this" {
 }
 
 resource "aws_iam_role" "uc_access" {
+  count = var.enable_unity_catalog_automation ? 1 : 0
+
   name               = local.role_name
-  assume_role_policy = data.databricks_aws_unity_catalog_assume_role_policy.this.json
+  assume_role_policy = data.databricks_aws_unity_catalog_assume_role_policy.this[0].json
   tags               = var.tags
+
+  lifecycle {
+    precondition {
+      condition     = var.databricks_account_id != "" && var.databricks_metastore_id != ""
+      error_message = "enable_unity_catalog_automation=true requires databricks_account_id and databricks_metastore_id to be set in terraform.tfvars."
+    }
+  }
 }
 
 resource "aws_iam_policy" "uc_access" {
+  count = var.enable_unity_catalog_automation ? 1 : 0
+
   name   = "${local.role_name}-policy"
-  policy = data.databricks_aws_unity_catalog_policy.this.json
+  policy = data.databricks_aws_unity_catalog_policy.this[0].json
 }
 
 resource "aws_iam_role_policy_attachment" "uc_access" {
-  role       = aws_iam_role.uc_access.name
-  policy_arn = aws_iam_policy.uc_access.arn
+  count = var.enable_unity_catalog_automation ? 1 : 0
+
+  role       = aws_iam_role.uc_access[0].name
+  policy_arn = aws_iam_policy.uc_access[0].arn
 }
 
 # -----------------------------------------------------------------------------
 # 3. Unity Catalog storage credential + external location
+#    GATED — see var.enable_unity_catalog_automation and the header comment.
 # -----------------------------------------------------------------------------
 resource "databricks_storage_credential" "raw" {
+  count = var.enable_unity_catalog_automation ? 1 : 0
+
   provider     = databricks.account
   name         = "${var.project_name}-raw-credential"
   metastore_id = var.databricks_metastore_id
   aws_iam_role {
-    role_arn = aws_iam_role.uc_access.arn
+    role_arn = aws_iam_role.uc_access[0].arn
   }
   comment = "Managed by Terraform — wallet-activity-lakehouse raw landing zone"
 }
 
 resource "databricks_external_location" "raw" {
+  count = var.enable_unity_catalog_automation ? 1 : 0
+
   provider        = databricks.account
   name            = "${var.project_name}-raw"
   url             = "s3://${aws_s3_bucket.raw.id}/raw"
-  credential_name = databricks_storage_credential.raw.id
+  credential_name = databricks_storage_credential.raw[0].id
   comment         = "Managed by Terraform — CDC + on-chain landing zone read by spark/*.py"
 
   depends_on = [aws_iam_role_policy_attachment.uc_access]

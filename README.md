@@ -2,7 +2,7 @@
 
 A robust, production-realistic CDC → lakehouse → dbt pipeline designed to showcase a modern data stack processing operational PostgreSQL data, streaming events, and on-chain crypto activity.
 
-**What it is:** A synthetic wallet application's operational database (PostgreSQL), captured via Change Data Capture (Debezium), landed and merged into a Delta Lake bronze layer (Spark, batch and streaming), modeled into a dimensional schema with dbt (comprehensive testing, documented grain, and Type-2 SCD tracking), enriched with real on-chain data from Etherscan, provisioned with Terraform, gated by CI/CD, and exposed through a dbt Semantic Layer for BI.
+What it is: A synthetic wallet application's operational database (PostgreSQL), captured via Change Data Capture (Debezium), landed and merged into a Delta Lake bronze layer (Spark, batch and streaming), modeled into a dimensional schema with dbt (comprehensive testing, documented grain, and Type-2 SCD tracking), enriched with real on-chain data from Etherscan, provisioned with Terraform, gated by CI/CD, and exposed through a dbt Semantic Layer for BI.
 
 **What it is not:** A toy script or an untested wrapper. It is a scoped, fully verified demonstration of an end-to-end modern data engineering stack.
 
@@ -79,13 +79,17 @@ account, actually executed — not just written and assumed correct:
   `ingestion/fetch_onchain_transactions.py` were verified directly against
   Etherscan/BaseScan before being committed, rather than pulled from memory
   (an earlier draft had the USDT address wrong by one character).
-- **Terraform**: written against the Databricks Terraform provider's
-  documented resource/data-source shapes (verified against the provider's
-  own docs, not written from memory), and syntax-checked with `python-hcl2`
-  since this sandbox has no network path to install the real `terraform`
-  CLI. **Not** run through `terraform plan`/`apply` here — do that yourself
-  once you have AWS + Databricks account IDs to fill into
-  `terraform.tfvars`.
+- **Terraform**: `terraform fmt`/`init`/`validate` have been run for real
+  (not just `python-hcl2` syntax-checked) on the maintainer's machine, with
+  the real `aws` and `databricks` providers downloaded. The AWS-only
+  resources (S3 bucket, GitHub OIDC/IAM) have real `terraform apply`
+  behind them. The Unity Catalog resources (`databricks_storage_credential`,
+  `databricks_external_location`) do not, and can't be applied on
+  Databricks Free Edition at all — confirmed directly against Databricks'
+  own docs that Free Edition has no Account Console / account-level API
+  access, which those two resource types require. `main.tf` gates them
+  behind `enable_unity_catalog_automation` (default `false`) for exactly
+  this reason, rather than silently pretending they'd work.
 - **CI workflow**: YAML-syntax-checked; not triggered on real GitHub
   Actions from this sandbox (no way to do that from here). The dbt/Python
   steps mirror commands already verified locally; the Terraform job uses
@@ -96,6 +100,7 @@ account, actually executed — not just written and assumed correct:
   (`docker compose up`) and a Databricks workspace to actually execute.
 
 ## Databricks Free Edition — what actually works here
+
 Free Edition (the current free tier — "Community Edition" is the retired
 predecessor) is **serverless-only**: no classic clusters, no custom Spark
 configs, one 2X-Small SQL warehouse. Two limits directly shaped this repo's
@@ -110,8 +115,26 @@ design, verified against Databricks' own docs before writing the code:
 2. **External storage requires Unity Catalog.** Serverless compute can't
    use DBFS mounts or instance profiles — external locations must go
    through Unity Catalog, which Free Edition includes. The Spark jobs here
-   read/write via `catalog.schema.table` names, and `terraform/` provisions
-   the storage credential + external location that makes that possible.
+   read/write via `catalog.schema.table` names, and `terraform/main.tf`
+   provisions the storage credential + external location that makes that
+   possible — **on a paid tier**, see point 3.
+3. **Free Edition has no Account Console / account-level API access at
+   all** (confirmed directly against Databricks' own docs, not assumed).
+   The storage credential and external location in point 2 are
+   account-level resources, so they genuinely cannot be created via
+   Terraform on Free Edition — not a credentials problem, a platform one.
+   `terraform/main.tf` gates those resources behind
+   `enable_unity_catalog_automation` (default `false`) for exactly this
+   reason; the S3 bucket and the GitHub OIDC/IAM resources in
+   `terraform/github_oidc.tf` have no such dependency and apply on Free
+   Edition without issue. To actually wire up an external S3 location on
+   Free Edition, check your workspace's own Catalog Explorer for a manual
+   "external data" path — Databricks documents one at the workspace level,
+   separate from the account-level Terraform flow, but whether Free Edition
+   exposes it isn't something the public docs confirm either way. Failing
+   that, the Spark jobs still work against Free Edition's default
+   Databricks-managed catalog storage; you just don't get "bring your own
+   S3 bucket."
 
 ## Setup
 
@@ -163,7 +186,7 @@ python ingestion/fetch_onchain_transactions.py --chain ethereum --limit 200
 This is the manual/local run. In production this runs on a schedule
 instead — see step 6 below.
 
-### 5. Provision AWS + Unity Catalog with Terraform
+### 5. Provision AWS with Terraform
 
 ```bash
 cd terraform
@@ -172,6 +195,13 @@ terraform init
 terraform plan
 terraform apply
 ```
+
+This creates the S3 landing-zone bucket and the GitHub OIDC/IAM resources.
+It does **not** touch Unity Catalog by default — `enable_unity_catalog_automation`
+defaults to `false` because those resources need Databricks Account Console
+access, which Free Edition doesn't have (see "Databricks Free Edition — what
+actually works here" above). Leave it `false` unless you're on a paid
+Databricks tier.
 
 ### 6. Enable the scheduled on-chain ingestion workflow
 

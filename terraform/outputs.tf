@@ -4,13 +4,13 @@ output "raw_bucket_name" {
 }
 
 output "uc_access_role_arn" {
-  description = "IAM role ARN Unity Catalog assumes to read/write the raw bucket."
-  value       = aws_iam_role.uc_access.arn
+  description = "IAM role ARN Unity Catalog assumes to read/write the raw bucket. Null unless enable_unity_catalog_automation=true (see that variable's description — this doesn't exist on Databricks Free Edition)."
+  value       = try(aws_iam_role.uc_access[0].arn, null)
 }
 
 output "external_location_url" {
-  description = "s3:// URL registered as the Unity Catalog external location for spark/*.py to read."
-  value       = databricks_external_location.raw.url
+  description = "s3:// URL registered as the Unity Catalog external location for spark/*.py to read. Null unless enable_unity_catalog_automation=true (see that variable's description)."
+  value       = try(databricks_external_location.raw[0].url, null)
 }
 
 output "github_actions_role_arn" {

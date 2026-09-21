@@ -13,3 +13,6 @@ terraform/.terraform/
 terraform/terraform.tfstate
 terraform/terraform.tfstate.backup
 terraform/terraform.tfvars
+
+# Windows/WSL artifact on files downloaded through the browser — not project content
+*:Zone.Identifier
