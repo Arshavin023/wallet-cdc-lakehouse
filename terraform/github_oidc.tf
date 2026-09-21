@@ -23,10 +23,29 @@ resource "aws_iam_openid_connect_provider" "github_actions" {
   thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
 }
 
-# Scoped with StringLike on the `sub` claim to ONE repo and ONE ref
-# (the default branch — both `schedule` and manually-dispatched runs use
-# refs/heads/<default branch>). This is deliberately narrow: a wildcard
-# repo or `*` ref would let any fork or branch assume this role.
+locals {
+  github_owner     = split("/", var.github_repo)[0]
+  github_repo_name = split("/", var.github_repo)[1]
+}
+
+# Scoped to ONE repo and ONE ref (the default branch — both `schedule` and
+# manually-dispatched runs use refs/heads/<default branch>). This is
+# deliberately narrow: a wildcard repo or `*` ref would let any fork or
+# branch assume this role.
+#
+# GitHub's `sub` claim now embeds immutable numeric IDs alongside the
+# owner/repo names — confirmed by decoding an actual token from this repo:
+# "repo:owner@12345/repo@67890:ref:refs/heads/main", not the plain
+# "repo:owner/repo:ref:..." AWS's older published examples show (a real
+# anti-squatting change: a renamed-away username/repo can't be reclaimed
+# by someone else and inherit old trust relationships). The owner/repo
+# NAMES still appear before each `@`, so `*` only wildcards the numeric ID
+# portions — the actual scoping stays exact. AWS's IAM API additionally
+# *requires* this trust policy to condition on `sub` or `job_workflow_ref`
+# specifically for this provider (confirmed by a real `UpdateAssumeRolePolicy`
+# rejection: "must evaluate ... token.actions.githubusercontent.com:sub or
+# ...job_workflow_ref which is not scoped to all") — conditioning on
+# `repository`/`ref` alone, however precise, isn't accepted on its own.
 resource "aws_iam_role" "github_actions_onchain_ingestion" {
   name = "${var.project_name}-gha-onchain-ingestion-${var.environment}"
 
@@ -42,7 +61,7 @@ resource "aws_iam_role" "github_actions_onchain_ingestion" {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
           }
           StringLike = {
-            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:ref:refs/heads/${var.github_default_branch}"
+            "token.actions.githubusercontent.com:sub" = "repo:${local.github_owner}@*/${local.github_repo_name}@*:ref:refs/heads/${var.github_default_branch}"
           }
         }
       }
