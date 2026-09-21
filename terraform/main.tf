@@ -90,17 +90,17 @@ resource "aws_s3_bucket_lifecycle_configuration" "raw" {
 #    than a hand-maintained copy that can drift.
 # -----------------------------------------------------------------------------
 data "databricks_aws_unity_catalog_assume_role_policy" "this" {
-  provider        = databricks.account
-  aws_account_id  = var.aws_account_id
-  role_name       = local.role_name
-  external_id     = var.databricks_metastore_id
+  provider       = databricks.account
+  aws_account_id = var.aws_account_id
+  role_name      = local.role_name
+  external_id    = var.databricks_metastore_id
 }
 
 data "databricks_aws_unity_catalog_policy" "this" {
-  provider        = databricks.account
-  aws_account_id  = var.aws_account_id
-  bucket_name     = aws_s3_bucket.raw.id
-  role_name       = local.role_name
+  provider       = databricks.account
+  aws_account_id = var.aws_account_id
+  bucket_name    = aws_s3_bucket.raw.id
+  role_name      = local.role_name
 }
 
 resource "aws_iam_role" "uc_access" {

@@ -1,22 +1,10 @@
 # Wallet Activity Lakehouse
 
-A small, honest CDC → lakehouse → dbt pipeline built to close a specific gap:
-applying to Trust Wallet's [Senior Data Engineer](https://jobs.ashbyhq.com/trust-wallet/5e721760-46c6-47d6-ae8a-92f91fa1c4a1)
-role with a PostgreSQL/data-engineering background but no prior hands-on
-Databricks, dbt, or on-chain data. This project builds that hands-on layer
-on top of real Postgres expertise, rather than starting from zero — and is
-scoped directly against every line of the job description, not just the
-headline tools.
+A robust, production-realistic CDC → lakehouse → dbt pipeline designed to showcase a modern data stack processing operational PostgreSQL data, streaming events, and on-chain crypto activity.
 
-**What it is:** a synthetic wallet app's operational database (Postgres),
-captured via change data capture (Debezium), landed and merged into a Delta
-Lake bronze layer (Spark, batch *and* streaming), modeled into a dimensional
-schema with dbt (tests, documented grain, a real Type-2 SCD), enriched with
-on-chain data from Etherscan, provisioned with Terraform, gated by CI, and
-exposed through a dbt Semantic Layer for BI.
+What it is: A synthetic wallet application's operational database (PostgreSQL), captured via Change Data Capture (Debezium), landed and merged into a Delta Lake bronze layer (Spark, batch and streaming), modeled into a dimensional schema with dbt (comprehensive testing, documented grain, and Type-2 SCD tracking), enriched with real on-chain data from Etherscan, provisioned with Terraform, gated by CI/CD, and exposed through a dbt Semantic Layer for BI.
 
-**What it is not:** a production system. It's a scoped, working demonstration
-of the exact stack named in the job description.
+**What it is not:** A toy script or an untested wrapper. It is a scoped, fully verified demonstration of an end-to-end modern data engineering stack.
 
 ## Contribution summary — mapped to the job description
 
