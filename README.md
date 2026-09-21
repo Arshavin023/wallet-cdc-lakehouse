@@ -2,33 +2,9 @@
 
 A robust, production-realistic CDC → lakehouse → dbt pipeline designed to showcase a modern data stack processing operational PostgreSQL data, streaming events, and on-chain crypto activity.
 
-What it is: A synthetic wallet application's operational database (PostgreSQL), captured via Change Data Capture (Debezium), landed and merged into a Delta Lake bronze layer (Spark, batch and streaming), modeled into a dimensional schema with dbt (comprehensive testing, documented grain, and Type-2 SCD tracking), enriched with real on-chain data from Etherscan, provisioned with Terraform, gated by CI/CD, and exposed through a dbt Semantic Layer for BI.
+**What it is:** A synthetic wallet application's operational database (PostgreSQL), captured via Change Data Capture (Debezium), landed and merged into a Delta Lake bronze layer (Spark, batch and streaming), modeled into a dimensional schema with dbt (comprehensive testing, documented grain, and Type-2 SCD tracking), enriched with real on-chain data from Etherscan, provisioned with Terraform, gated by CI/CD, and exposed through a dbt Semantic Layer for BI.
 
 **What it is not:** A toy script or an untested wrapper. It is a scoped, fully verified demonstration of an end-to-end modern data engineering stack.
-
-## Contribution summary — mapped to the job description
-
-**Required qualifications**
-
-| JD requirement | Where |
-|---|---|
-| Databricks, Delta Lake, Spark — batch *and* streaming, judgement between them | `spark/bronze_cdc_to_delta.py` (batch `MERGE`) vs `spark/streaming_cdc_to_delta.py` (Auto Loader, `Trigger.AvailableNow()` — the only non-deprecated trigger Free Edition serverless supports, verified against Databricks' docs) |
-| Dimensional modelling, SCD, defend the grain | `dbt/wallet_lakehouse/models/marts/` — grain documented per model; `dim_users` is a **real Type-2 SCD** via `snapshots/users_snapshot.sql`, not just a comment describing one (see "What's actually been verified" below) |
-| dbt or equivalent, with tests | 28 data tests, all green against a real build |
-| Cloud proficiency: IAM, object storage, networking, IaC | `terraform/` — S3 bucket (versioned, encrypted, lifecycle-managed), cross-account IAM role via Databricks' own policy-generating Terraform data sources, Unity Catalog storage credential + external location |
-| Python and SQL, production transformations and connectors | throughout |
-| Testing, monitoring, governance | dbt tests + `dbt source freshness` (staleness monitoring) + `monitoring/alert_on_dbt_failures.py` (Slack alerting on failures) |
-| 3+ years hands-on ownership | (career history, not code — see the application itself) |
-
-**Preferred skills**
-
-| JD preference | Where |
-|---|---|
-| CDC and replication from operational databases | Debezium → Kafka → `cdc/consume_cdc_events.py` |
-| Blockchain / on-chain data | `ingestion/fetch_onchain_transactions.py` — Etherscan V2, verified contract addresses |
-| IaC (Terraform) and CI/CD | `terraform/` + `.github/workflows/ci.yml` (dbt build+test, Python syntax checks, `terraform fmt`/`validate` on every push) |
-| BI / semantic layer (Holistics, Looker, or similar) | `models/marts/_semantic_models.yml` — a dbt Semantic Layer (MetricFlow) with 2 semantic models and 5 governed metrics on top of `fact_transactions`/`dim_users` |
-| Containerisation and orchestration | `docker-compose.yml` — Kafka (KRaft mode, no Zookeeper) + Debezium Connect, with the source Postgres deliberately kept outside the stack (see the file's header comment for why that's the more production-realistic shape) |
 
 ## Architecture
 
@@ -120,7 +96,6 @@ account, actually executed — not just written and assumed correct:
   (`docker compose up`) and a Databricks workspace to actually execute.
 
 ## Databricks Free Edition — what actually works here
-
 Free Edition (the current free tier — "Community Edition" is the retired
 predecessor) is **serverless-only**: no classic clusters, no custom Spark
 configs, one 2X-Small SQL warehouse. Two limits directly shaped this repo's
@@ -257,6 +232,34 @@ Push to a `main` branch on GitHub and `.github/workflows/ci.yml` runs the
 dbt build+test suite, Python syntax checks, and Terraform validation on
 every push/PR automatically. `.github/workflows/onchain-ingestion.yml`
 (step 6) runs independently, on its own schedule.
+
+## How this runs in production, vs. the walkthrough above
+
+Steps 1–9 above run everything by hand, once, in sequence — that's the
+fastest way to verify each stage actually works, and it's how you'd
+reproduce this yourself. It is **not** how any of this would operate day to
+day. Production replaces "a person typing commands in order" with each
+stage running on its own trigger, continuously or on a schedule, decoupled
+from the others. Stage by stage, what's already wired that way vs. what's
+the documented target:
+
+| Stage | In this repo (demo) | In production |
+|---|---|---|
+| Source writes | `generate_synthetic_data.py` + `simulate_activity.py` fabricate traffic on demand | Real application traffic hits Postgres continuously — nothing to "run" |
+| Postgres | Your host machine's own instance, standing in for the real thing | Managed (RDS/Aurora) or self-managed HA (Patroni + etcd + HAProxy) — already the assumption baked into `oltp/schema.sql`'s setup notes |
+| CDC capture | Single-broker Kafka + one Connect worker (`docker compose up`), started/stopped per session | Debezium + Kafka running persistently — MSK or Confluent Cloud, multi-broker/multi-worker for real HA (this repo's single-broker setup is explicitly flagged as a demo limitation, not a production claim) |
+| Bronze landing | `cdc/consume_cdc_events.py` run manually in a terminal (`&`), writing to local disk | A long-running consumer (or Spark Structured Streaming reading Kafka directly) as a supervised service — not a background shell job |
+| Bronze merge | `spark/bronze_cdc_to_delta.py` / `streaming_cdc_to_delta.py` run by hand as scripts/notebooks | **This is the one real gap** (also called out in Honest scope notes below): these should run as Databricks Jobs on a schedule (`Trigger.AvailableNow()` every N minutes) — written and executable, but no scheduler invokes them yet. Same mechanism as the on-chain workflow below, just not wired up |
+| On-chain ingestion | — | **Actually production-shaped already**: `.github/workflows/onchain-ingestion.yml` runs on a daily cron via GitHub Actions, OIDC-authenticated to AWS, no manual step and no stored credential |
+| Transformation (dbt) | `dbt build` typed by hand against DuckDB, and re-run automatically in CI on every push/PR | CI verifies the *model* is correct (tests, SCD2, freshness) on every code change — it is not a run schedule. Production dbt runs as a triggered task after bronze lands: a Databricks Workflows task, a dbt Cloud job, or an Airflow DAG step |
+| Semantic layer / BI | `dbt parse` + inspecting `target/manifest.json` confirms the 5 metrics compile and are queryable | A BI tool (Hex, Tableau, Looker, etc.) connects to the dbt Semantic Layer / MetricFlow API so analysts query governed metrics without writing SQL — no BI tool account was in scope here, so this is proven at the metric-compilation level, not the live-query level |
+| Monitoring | `monitoring/alert_on_dbt_failures.py` runs in CI, catching transformation-layer test failures | Production extends this up the stack — consumer lag, connector health, Spark job failures — typically via the orchestrator's own alerting (Databricks Jobs → Slack/PagerDuty) rather than a bespoke script per layer |
+
+The throughline: **the on-chain ingestion path is the one stage that's fully
+production-shaped today** — scheduled, credential-free, decoupled from
+manual intervention. Every other stage is built and independently verified
+(see the section above), but still needs an orchestrator's schedule wired
+to it to make the leap from "demonstrated correct" to "runs itself."
 
 ## Data model
 
