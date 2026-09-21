@@ -1,0 +1,80 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: >
+      Bronze layer landed by CDC (Debezium -> Kafka -> Spark MERGE, see
+      spark/bronze_cdc_to_delta.py) plus on-chain data pulled from Etherscan.
+      In this local/dbt-duckdb setup, the dbt seeds under seeds/ stand in for
+      these bronze Delta tables so the transformation layer can be built and
+      tested without a live Databricks workspace.
+    schema: main_seed # dbt-duckdb default schema naming for the seeds' +schema: seed config (see dbt_project.yml); on Databricks this points at the real bronze schema instead, e.g. wallet_lakehouse.bronze
+    # Source freshness: `dbt source freshness` flags a table as warn/error if
+    # its newest updated_at is older than these thresholds — the CDC-pipeline
+    # equivalent of "did the last batch actually land". This is the piece
+    # that turns dbt tests (data *correctness*) into monitoring (data
+    # *arriving on time*); see monitoring/alert_on_dbt_failures.py for what
+    # consumes the result. Not runnable against static seeds (they never get
+    # fresher), so this is dormant in the local/dbt-duckdb setup and becomes
+    # live once `bronze` points at the real, continuously-updated Delta
+    # tables on Databricks.
+    loaded_at_field: updated_at
+    freshness:
+      warn_after: { count: 6, period: hour }
+      error_after: { count: 24, period: hour }
+    tables:
+      - name: users
+        description: Raw CDC feed of the users table (latest row per user_id).
+      - name: wallets
+        description: Raw CDC feed of the wallets table (latest row per wallet_id).
+      - name: transactions
+        description: Raw CDC feed of the transactions table (latest row per transaction_id).
+
+models:
+  - name: stg_users
+    description: One row per user, deduplicated and lightly cleaned.
+    columns:
+      - name: user_id
+        description: Primary key.
+        tests: [unique, not_null]
+      - name: kyc_status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['pending', 'verified', 'rejected']
+
+  - name: stg_wallets
+    description: One row per wallet, deduplicated and lightly cleaned.
+    columns:
+      - name: wallet_id
+        tests: [unique, not_null]
+      - name: user_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_users')
+                field: user_id
+      - name: chain
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['ethereum', 'bsc', 'polygon', 'arbitrum', 'base']
+
+  - name: stg_transactions
+    description: One row per transaction, deduplicated and lightly cleaned.
+    columns:
+      - name: transaction_id
+        tests: [unique, not_null]
+      - name: wallet_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_wallets')
+                field: wallet_id
+      - name: status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['pending', 'confirmed', 'failed']

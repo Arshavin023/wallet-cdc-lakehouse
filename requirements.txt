@@ -1,0 +1,27 @@
+# Core pipeline dependencies. Install with:
+#   pip install -r requirements.txt
+
+# CDC consumer (cdc/consume_cdc_events.py)
+confluent-kafka>=2.5,<3.0
+
+# On-chain ingestion (ingestion/fetch_onchain_transactions.py)
+requests>=2.31,<3.0
+
+# simulate_activity.py -> live writes against Postgres
+psycopg2-binary>=2.9,<3.0
+
+# Optional: only needed if landing raw events straight to S3 instead of
+# local disk (set LANDING_ZONE_S3_BUCKET)
+boto3>=1.34,<2.0
+
+# Local dbt testing against the seed data, no Databricks account needed
+dbt-core>=1.8,<2.0
+dbt-duckdb>=1.8,<2.0
+
+# Production target — swap in once you have Databricks Free Edition set up
+# dbt-databricks>=1.8,<2.0
+
+# Spark jobs (spark/*.py) — only needed for running/testing locally;
+# on an actual Databricks job/notebook, Spark + Delta are already provided
+# pyspark>=3.5,<4.0
+# delta-spark>=3.2,<4.0

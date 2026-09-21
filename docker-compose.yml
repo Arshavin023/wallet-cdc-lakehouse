@@ -1,0 +1,96 @@
+# =============================================================================
+# Wallet Activity Lakehouse — local CDC stack, shaped after production
+#
+# Two deliberate departures from a "quickest possible demo" setup, both
+# chosen to mirror how this would actually be run in production rather
+# than how a tutorial usually shows it:
+#
+# 1. NO POSTGRES HERE. The source OLTP database is NOT part of this
+#    compose file — it's your HOST machine's own Postgres (`wallets`
+#    database), standing in for wherever the real thing would live: a
+#    managed service (RDS, Cloud SQL), or a self-managed HA cluster
+#    (CloudNativePG on Kubernetes, or Patroni+etcd+HAProxy). In production,
+#    Debezium never runs "next to" its source database in the same compose
+#    stack — it's a separate, already-running system that Kafka Connect
+#    reaches over the network. See oltp/schema.sql for how to set it up.
+#
+# 2. KAFKA RUNS IN KRAFT MODE — NO ZOOKEEPER. Zookeeper is deprecated as
+#    of Kafka 4.0 and removed entirely; every Kafka cluster stood up today
+#    (self-managed or via a managed service) uses KRaft. Running Zookeeper
+#    here would demo a topology nobody would actually deploy new anymore.
+#
+# WHAT'S STILL A SCALED-DOWN DEMO, NOT PRODUCTION:
+#   - One Kafka broker, not the 3+ (with replication.factor=3 on every
+#     topic, including Connect's internal config/offset/status topics)
+#     that real HA requires. A real deployment runs this via a Kubernetes
+#     operator (Strimzi is the standard one) or a managed service (AWS
+#     MSK, Confluent Cloud, Redpanda Cloud) — not docker-compose, which
+#     is a dev-orchestration tool, not a production one.
+#   - One Kafka Connect worker, not a distributed cluster of several.
+#     Connect workers are themselves stateless — all connector config,
+#     offsets, and status live in Kafka's internal topics (below), not on
+#     the worker's own filesystem — so Connect HA is really "how many
+#     Kafka-backed workers can pick up the work", not a volume question.
+#
+# Setup:
+#   createdb wallets && psql -d wallets -f oltp/schema.sql
+#   cp .env.example .env
+#   python3 scripts/generate_kafka_cluster_id.py    # paste the output into .env — ONCE, see that
+#                                                    # script's docstring for why not to redo this later
+#   docker compose up -d                            # reads KAFKA_CLUSTER_ID from .env automatically
+#   python scripts/register_connector.py
+#   python cdc/consume_cdc_events.py
+#
+# Why host.docker.internal: containers can't reach your host via
+# `localhost` — that resolves to the container itself. Docker Desktop
+# (Mac/Windows) provides `host.docker.internal` automatically; the
+# `extra_hosts` entry below makes it resolve on Linux too (Docker Engine
+# 20.10+). Also make sure your host Postgres actually accepts the
+# connection: `listen_addresses` needs to include more than just
+# `localhost`, and `pg_hba.conf` needs an entry for the Docker bridge
+# subnet (commonly 172.17.0.0/16 — check `docker network inspect bridge`
+# for yours) with an auth method that isn't `peer` (e.g. `scram-sha-256`).
+# =============================================================================
+version: "3.8"
+
+services:
+  kafka:
+    image: debezium/kafka:2.7
+    container_name: wal-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID} #:?set KAFKA_CLUSTER_ID before starting — see the setup comment above
+      BROKER_ID: "1"
+      NODE_ROLE: combined # this one node acts as both controller and broker — fine for a single-node demo, never for real HA
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+    volumes:
+      - kafka_data:/kafka/data # <- the actual fix for "docker compose down wipes everything":
+      #    Kafka's own log/topic storage now survives a full teardown,
+      #    including the CDC events sitting in wallet.public.* topics and
+      #    Connect's config/offset/status topics (see below).
+
+  connect:
+    image: debezium/connect:2.7
+    container_name: wal-connect
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: wallet-lakehouse-cdc
+      CONFIG_STORAGE_TOPIC: wallet_connect_configs
+      OFFSET_STORAGE_TOPIC: wallet_connect_offsets
+      STATUS_STORAGE_TOPIC: wallet_connect_statuses
+      # Real HA would set these topics' replication.factor to 3 (matching
+      # a 3-broker cluster). Forced to 1 here — there's only one broker to
+      # replicate to — which is exactly why "one Kafka broker" above is
+      # called out as a demo simplification, not a production shape.
+    extra_hosts:
+      # Lets this container reach your HOST Postgres via host.docker.internal
+      # (automatic on Docker Desktop; this line is what makes it work on Linux).
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - kafka
+
+volumes:
+  kafka_data:

@@ -1,0 +1,33 @@
+name: 'wallet_lakehouse'
+version: '1.0.0'
+config-version: 2
+
+profile: 'wallet_lakehouse'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  wallet_lakehouse:
+    staging:
+      +materialized: view
+      +schema: staging
+    marts:
+      +materialized: table
+      +schema: marts
+
+seeds:
+  wallet_lakehouse:
+    +schema: seed
+    transactions:
+      +column_types:
+        amount: decimal(38,18)
+        usd_value_at_tx: decimal(18,2)
+        fee_native: decimal(38,18)

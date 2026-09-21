@@ -1,0 +1,108 @@
+name: CI
+
+# Runs the parts of this pipeline that can actually be verified without a
+# live Databricks workspace or AWS account: the dbt transformation layer
+# (against dbt-duckdb, the same local target used for development — see
+# dbt/profiles.local.yml), Python syntax/import checks on the pipeline
+# scripts, and Terraform formatting/validation. This is deliberately not
+# "deploys to prod on merge" CI — there's no production Databricks account
+# behind this portfolio project — but it is the real, working shape of
+# "CI/CD for data workloads": dbt build + tests gate every change to the
+# transformation layer, the same way they would in front of a real
+# Databricks target.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  dbt:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dbt/wallet_lakehouse
+    env:
+      DBT_PROFILES_DIR: ${{ github.workspace }}/dbt/profiles_dir
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dbt
+        run: pip install dbt-core dbt-duckdb
+
+      - name: dbt deps
+        run: dbt deps
+
+      - name: dbt seed
+        run: dbt seed --target dev --full-refresh
+
+      - name: dbt snapshot
+        run: dbt snapshot --target dev
+
+      - name: dbt build (run models + tests)
+        run: dbt build --target dev
+
+      - name: Check data source freshness (non-blocking — seeds are static, see _staging.yml)
+        run: dbt source freshness --target dev
+        continue-on-error: true
+
+      - name: Surface any test failures
+        if: always()
+        run: |
+          pip install requests
+          python ../../monitoring/alert_on_dbt_failures.py --run-results target/run_results.json
+
+      - name: Upload dbt artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-artifacts
+          path: dbt/wallet_lakehouse/target/
+          retention-days: 14
+
+  python-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Byte-compile all pipeline scripts
+        run: |
+          python -m py_compile scripts/*.py cdc/*.py ingestion/*.py spark/*.py monitoring/*.py
+
+      - name: Regenerate synthetic dataset (smoke test)
+        run: python scripts/generate_synthetic_data.py --users 50 --to csv --out /tmp/seed_smoke_test
+
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: terraform fmt (check only)
+        run: terraform fmt -check -recursive
+
+      - name: terraform init (no backend, validate only)
+        run: terraform init -backend=false
+
+      - name: terraform validate
+        run: terraform validate

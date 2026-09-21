@@ -1,0 +1,71 @@
+name: On-chain ingestion
+
+# Replaces "run this by hand whenever you remember to" with an actual
+# schedule — the production-grade version of ingestion/fetch_onchain_transactions.py.
+#
+# Authenticates to AWS via OIDC (terraform/github_oidc.tf), not a stored
+# access key: GitHub mints a short-lived signed token for this run, AWS
+# trusts it because of the identity provider + role trust policy Terraform
+# creates, and the assumed role can do exactly one thing — PutObject under
+# raw/onchain/ in the raw bucket. Nothing to rotate, nothing to leak.
+#
+# Required GitHub repo configuration (Settings > Secrets and variables > Actions):
+#   Secrets:
+#     ETHERSCAN_API_KEY      your free Etherscan key
+#   Variables:
+#     AWS_ROLE_ARN           `terraform output github_actions_role_arn`
+#     AWS_REGION             matches terraform.tfvars' aws_region
+#     LANDING_ZONE_S3_BUCKET `terraform output raw_bucket_name`
+#
+# Runs daily at 03:17 UTC (an off-the-hour minute, so it's not stampeding
+# GitHub's scheduler alongside every other repo's "on the hour" cron jobs)
+# and on demand via the Actions tab.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      chain:
+        description: "Chain to pull (must have SAMPLE_ADDRESSES configured — see the script)"
+        required: false
+        default: "ethereum"
+        type: choice
+        options: [ethereum, base]
+      limit:
+        description: "Max transactions per address"
+        required: false
+        default: "200"
+
+permissions:
+  id-token: write # required for OIDC — nothing else this workflow does needs elevated permissions
+  contents: read
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install requests boto3
+
+      - name: Configure AWS credentials (OIDC — no stored access key)
+        uses: aws-actions/configure-aws-credentials@v6.2.4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Fetch on-chain transactions and land them in S3
+        env:
+          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
+          LANDING_ZONE_S3_BUCKET: ${{ vars.LANDING_ZONE_S3_BUCKET }}
+        run: |
+          python ingestion/fetch_onchain_transactions.py \
+            --chain "${{ inputs.chain || 'ethereum' }}" \
+            --limit "${{ inputs.limit || '200' }}"

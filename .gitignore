@@ -1,0 +1,16 @@
+landing_zone/
+dbt/wallet_lakehouse/target/
+dbt/wallet_lakehouse/logs/
+dbt/wallet_lakehouse/dbt_packages/
+dbt/wallet_lakehouse/dbt_local.duckdb
+dbt/wallet_lakehouse/dbt_local.duckdb.wal
+__pycache__/
+*.pyc
+.env
+
+# Terraform
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/terraform.tfvars

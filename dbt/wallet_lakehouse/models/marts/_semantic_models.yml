@@ -1,0 +1,137 @@
+version: 2
+
+# =============================================================================
+# BI / semantic layer — dbt's native Semantic Layer (MetricFlow), built on
+# top of fact_transactions/dim_wallets rather than a separate BI tool.
+#
+# Why this instead of standing up Holistics/Looker/Metabase for a portfolio
+# project: the JD names those as "or similar" preferred tools, and dbt's own
+# semantic layer is the same idea (one governed place metric definitions
+# live, so "total transaction volume" means the same thing everywhere it's
+# queried) without needing a separate hosted BI product or account. A real
+# Databricks deployment would typically expose these same metrics through
+# Databricks' own AI/BI Genie or a connected Looker/Holistics instance —
+# noted here rather than pretended away.
+#
+# Query these with the MetricFlow CLI once dbt-metricflow is installed:
+#   mf query --metrics transaction_volume_usd --group-by metric_time__day
+#   mf query --metrics confirmed_transaction_rate --group-by chain
+#
+# This YAML has been parse-checked with `dbt parse` (confirms the semantic
+# graph is valid and every entity/dimension/measure reference resolves) but
+# not query-executed here — dbt-metricflow's own dependency chain didn't
+# install cleanly in this sandbox (a transitive package, `halo`, fails to
+# build against this environment's setuptools version). It's expected to
+# install cleanly in a normal dev environment; `pip install "dbt-metricflow[duckdb]"`.
+# =============================================================================
+
+semantic_models:
+  - name: transactions
+    description: One row per transaction — the atomic event this whole semantic layer is built on.
+    model: ref('fact_transactions')
+    defaults:
+      agg_time_dimension: submitted_date
+
+    entities:
+      - name: transaction_id
+        type: primary
+      - name: wallet_id
+        type: foreign
+      - name: user_id
+        type: foreign
+
+    dimensions:
+      - name: submitted_date
+        type: time
+        type_params:
+          time_granularity: day
+      - name: chain
+        type: categorical
+      - name: status
+        type: categorical
+      - name: direction
+        type: categorical
+      - name: asset_symbol
+        type: categorical
+
+    measures:
+      - name: usd_value_at_tx
+        description: Transaction value in USD at time of submission.
+        agg: sum
+      - name: transaction_count
+        description: Count of transactions.
+        agg: count
+        expr: transaction_id
+      - name: confirmed_transaction_count
+        description: Count of transactions with status = 'confirmed'.
+        agg: count
+        expr: transaction_id
+        agg_time_dimension: submitted_date
+        create_metric: false
+      - name: confirmation_seconds
+        description: Time from submission to confirmation, for confirmed transactions only.
+        agg: average
+
+  - name: users
+    description: One row per user (current state) — joins to transactions via user_id.
+    model: ref('dim_users')
+    defaults:
+      agg_time_dimension: user_created_at
+
+    entities:
+      - name: user_id
+        type: primary
+
+    dimensions:
+      - name: user_created_at
+        type: time
+        type_params:
+          time_granularity: day
+      - name: country_code
+        type: categorical
+      - name: kyc_status
+        type: categorical
+      - name: signup_channel
+        type: categorical
+
+    measures:
+      - name: wallet_count
+        description: Number of wallets linked to the user.
+        agg: sum
+
+metrics:
+  - name: transaction_volume_usd
+    description: Total USD value moved across all transactions.
+    type: simple
+    type_params:
+      measure: usd_value_at_tx
+
+  - name: transaction_count
+    description: Total number of transactions.
+    type: simple
+    type_params:
+      measure: transaction_count
+
+  - name: confirmed_transaction_count
+    description: Number of confirmed transactions.
+    type: simple
+    type_params:
+      measure: confirmed_transaction_count
+    filter: "{{ Dimension('transactions__status') }} = 'confirmed'"
+
+  - name: confirmed_transaction_rate
+    description: >
+      Share of transactions that end up confirmed (vs. pending/failed) — a
+      core reliability metric for a wallet product, and a natural example
+      of a ratio metric built from two simple metrics rather than a
+      hand-written CASE WHEN buried in a dashboard query.
+    type: ratio
+    type_params:
+      numerator: confirmed_transaction_count
+      denominator: transaction_count
+
+  - name: avg_confirmation_seconds
+    description: Average time from submission to confirmation, across confirmed transactions.
+    type: simple
+    type_params:
+      measure: confirmation_seconds

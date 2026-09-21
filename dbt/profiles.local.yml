@@ -1,0 +1,27 @@
+# Local dev/test profile — DuckDB, no external warehouse needed.
+# Use this to build and test the dbt project against the seed data before
+# ever touching Databricks:
+#
+#   DBT_PROFILES_DIR=./dbt dbt build --project-dir dbt/wallet_lakehouse --profiles-dir dbt --target dev
+#
+# (rename this file to profiles.yml, or point --profiles-dir at its folder,
+# however your dbt setup expects it)
+wallet_lakehouse:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: 'dbt_local.duckdb'
+      threads: 4
+
+    # Production target — Databricks SQL warehouse, reading/writing the
+    # Unity Catalog bronze/silver/gold schemas the Spark jobs populate.
+    # Requires the dbt-databricks adapter (`pip install dbt-databricks`).
+    databricks:
+      type: databricks
+      catalog: wallet_lakehouse
+      schema: dbt_wallet_lakehouse
+      host: "{{ env_var('DATABRICKS_HOST') }}"
+      http_path: "{{ env_var('DATABRICKS_HTTP_PATH') }}"   # from your Free Edition SQL warehouse
+      token: "{{ env_var('DATABRICKS_TOKEN') }}"
+      threads: 4
